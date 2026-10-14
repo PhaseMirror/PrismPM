@@ -10,13 +10,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-parallel-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-parallel-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint-and-policy:
     name: Lint & Dependency Policy
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Format, Clippy & Cargo Deny
@@ -32,6 +33,7 @@ jobs:
   model-and-audits:
     name: Model & Audits
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -48,6 +50,7 @@ jobs:
   unit-and-property-tests:
     name: Workspace Unit Tests
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -63,8 +66,10 @@ jobs:
   conformance:
     name: Conformance / ${{ matrix.suite }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
         suite:
           - contracts
@@ -88,6 +93,7 @@ jobs:
   fixtures-and-golden:
     name: Fixtures & Reviewed Golden Outputs
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Check Fixtures, Oracle & Golden Bytes
@@ -103,6 +109,7 @@ jobs:
   lean-and-formal-verification:
     name: Lean 4 Proofs & Formal Verification
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Verify Examples & LexLean
@@ -118,6 +125,7 @@ jobs:
   packaging-and-upstream:
     name: Packaging, API & Upstream Conformance
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
