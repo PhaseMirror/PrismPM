@@ -5,8 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: vv-${{ github.workflow }}-${{ github.ref }}
+  group: vv-${{ github.repository }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
