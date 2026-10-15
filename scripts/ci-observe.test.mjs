@@ -400,3 +400,150 @@ test('all observed workflows retain their full gates, always stop/upload, and ke
   for (const step of native.filter(value => value.uses)) assert.match(step.uses, /@[0-9a-f]{40}$/);
   assert.match(readFileSync(join(repository, 'xtask/src/main.rs'), 'utf8'), /"scripts\/ci-observe\.test\.mjs"/);
 });
+
+// Source-policy checks do not establish GitHub queue ordering or execution.
+test('actual validation workflows preserve complete budgets, scoped cancellation and bounded fanout', () => {
+  const prefixes = {
+    'bootstrap.yml': 'bootstrap',
+    'ci-parallel.yml': 'ci-parallel',
+    'honesty.yml': 'honesty',
+    'reproducibility.yml': 'reproducibility',
+    'vv.yml': 'vv',
+  };
+  const actual = Object.fromEntries([...Object.keys(prefixes), 'native-golden.yml'].map(name => [name, workflow(name)]));
+  const check = candidate => {
+    assert.deepEqual(Object.keys(candidate).sort(), Object.keys(actual).sort());
+    for (const [name, prefix] of Object.entries(prefixes)) {
+      assert.deepEqual(candidate[name].concurrency, {
+        group: `${prefix}-` + '${{ github.workflow }}-${{ github.ref }}',
+        'cancel-in-progress': true,
+      });
+      for (const job of Object.values(candidate[name].jobs)) {
+        assert.equal(job['continue-on-error'], undefined);
+        assert.equal(job.if, undefined);
+        if (name !== 'vv.yml') assert.equal(job['timeout-minutes'], undefined);
+      }
+    }
+    assert.equal(candidate['vv.yml'].jobs.vv['timeout-minutes'], 360);
+    assert.equal(candidate['native-golden.yml'].jobs['native-source-review']['timeout-minutes'], 360);
+    const parallel = candidate['ci-parallel.yml'];
+    assert.deepEqual(Object.keys(parallel.jobs), [
+      'lint-and-policy', 'model-and-audits', 'unit-and-property-tests',
+      'conformance', 'fixtures-and-golden', 'lean-and-formal-verification',
+      'packaging-and-upstream',
+    ]);
+    assert.deepEqual(parallel.jobs.conformance.strategy, {
+      'fail-fast': false,
+      'max-parallel': 3,
+      matrix: {suite: ['contracts', 'core', 'holo-stdlib', 'desktop-browser', 'system-oci', 'verification-schemas']},
+    });
+  };
+  check(actual);
+  const reject = mutate => {
+    const candidate = structuredClone(actual);
+    mutate(candidate);
+    assert.throws(() => check(candidate), {name: 'AssertionError'});
+  };
+  for (const name of Object.keys(prefixes)) {
+    reject(value => { value[name].concurrency.group = value[name].concurrency.group.replace('-${{ github.ref }}', ''); });
+    reject(value => { value[name].concurrency['cancel-in-progress'] = false; });
+    reject(value => { delete value[name].concurrency; });
+  }
+  for (const name of ['bootstrap.yml', 'ci-parallel.yml', 'honesty.yml', 'reproducibility.yml']) {
+    reject(value => { Object.values(value[name].jobs)[0]['timeout-minutes'] = 30; });
+  }
+  reject(value => { value['vv.yml'].jobs.vv['timeout-minutes'] = 180; });
+  reject(value => { value['native-golden.yml'].jobs['native-source-review']['timeout-minutes'] = 180; });
+  reject(value => { delete value['ci-parallel.yml'].jobs.conformance.strategy['max-parallel']; });
+  reject(value => { value['ci-parallel.yml'].jobs.conformance.strategy['max-parallel'] = 6; });
+  reject(value => { value['ci-parallel.yml'].jobs.conformance.strategy['fail-fast'] = true; });
+  reject(value => { value['ci-parallel.yml'].jobs.conformance.strategy.matrix.suite.pop(); });
+  reject(value => { delete value['ci-parallel.yml'].jobs['unit-and-property-tests']; });
+  reject(value => { value['vv.yml'].jobs.vv['continue-on-error'] = true; });
+  reject(value => { value['vv.yml'].jobs.vv.if = 'false'; });
+});
+
+test('actual reusable SDK policy queues sibling calls without changing its API or execution', () => {
+  const actual = workflow('sdk.yml');
+  const inputs = {
+    'sdk-image': {required: true, type: 'string'},
+    command: {required: true, type: 'string'},
+    context: {default: '.', type: 'string'},
+    reference: {default: '', type: 'string'},
+    release: {default: '', type: 'string'},
+    target: {default: '', type: 'string'},
+    plan: {default: '', type: 'string'},
+    backup: {default: '', type: 'string'},
+    'restore-target': {default: '', type: 'string'},
+    detach: {default: false, type: 'boolean'},
+    authorized: {default: false, type: 'boolean'},
+    'secret-directory': {default: '.prismpm/secrets', type: 'string'},
+    bundle: {default: '', type: 'string'},
+    'trusted-root': {default: '', type: 'string'},
+    policy: {default: '', type: 'string'},
+    'promotion-to': {default: '', type: 'string'},
+    environment: {default: '', type: 'string'},
+  };
+  const outputNames = ['release-digest', 'plan-digest', 'evidence-digest', 'policy-path', 'trusted-root-path', 'signature-referrer'];
+  const action = 'UOR-Foundation/PrismPM/action@f785ee46d794886c29b7efe80c2b261e48733a15';
+  const forwarding = Object.fromEntries(Object.keys(inputs).map(name => [name, '${{ inputs.' + name + ' }}']));
+  const check = candidate => {
+    assert.deepEqual(Object.keys(candidate), ['name', 'on', 'permissions', 'jobs']);
+    assert.deepEqual(Object.keys(candidate.on), ['workflow_call']);
+    assert.deepEqual(Object.keys(candidate.on.workflow_call), ['inputs', 'outputs']);
+    assert.deepEqual(candidate.on.workflow_call.inputs, inputs);
+    assert.deepEqual(candidate.on.workflow_call.outputs, Object.fromEntries(outputNames.map(name => [name, {
+      value: '${{ jobs.invoke.outputs.' + name + ' }}',
+    }])));
+    assert.deepEqual(candidate.permissions, {});
+    assert.deepEqual(Object.keys(candidate.jobs), ['invoke']);
+    const job = candidate.jobs.invoke;
+    assert.deepEqual(Object.keys(job).sort(), ['runs-on', 'concurrency', 'permissions', 'outputs', 'steps'].sort());
+    assert.equal(job['runs-on'], 'ubuntu-24.04');
+    assert.deepEqual(job.concurrency, {
+      group: 'prismpm-sdk-invoke-${{ github.workflow }}-${{ github.ref }}',
+      'cancel-in-progress': false,
+      queue: 'max',
+    });
+    assert.deepEqual(job.permissions, {contents: 'read'});
+    assert.deepEqual(job.outputs, Object.fromEntries(outputNames.map(name => [name, '${{ steps.prism.outputs.' + name + ' }}'])));
+    assert.deepEqual(job.steps, [
+      {uses: 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262', with: {'fetch-depth': 0}},
+      {
+        name: 'Fetch locked SDK inputs',
+        if: 'contains(fromJSON(\'["check", "build", "verify", "test"]\'), inputs.command)',
+        uses: action,
+        with: {'sdk-image': forwarding['sdk-image'], command: 'fetch', context: forwarding.context},
+      },
+      {id: 'prism', uses: action, with: forwarding},
+    ]);
+  };
+  check(actual);
+  const reject = mutate => {
+    const candidate = structuredClone(actual);
+    mutate(candidate);
+    assert.throws(() => check(candidate), {name: 'AssertionError'});
+  };
+  reject(value => { value.jobs.invoke.concurrency['cancel-in-progress'] = true; });
+  reject(value => { delete value.jobs.invoke.concurrency.queue; });
+  reject(value => { value.jobs.invoke.concurrency.queue = 'single'; });
+  reject(value => { value.jobs.invoke.concurrency.group = '${{ github.workflow }}-${{ github.ref }}'; });
+  reject(value => { value.jobs.invoke.concurrency.group = 'prismpm-sdk-invoke-${{ github.workflow }}'; });
+  reject(value => { value.jobs.invoke.concurrency.group = 'prismpm-sdk-invoke-${{ github.ref }}'; });
+  reject(value => { value.concurrency = value.jobs.invoke.concurrency; });
+  reject(value => { value.jobs.invoke['timeout-minutes'] = 60; });
+  reject(value => { value.jobs.invoke['continue-on-error'] = true; });
+  reject(value => { value.jobs.invoke.if = 'false'; });
+  reject(value => { value.jobs.extra = structuredClone(value.jobs.invoke); });
+  reject(value => { value.on.workflow_call.inputs['queue-key'] = {type: 'string', default: ''}; });
+  reject(value => { delete value.on.workflow_call.inputs.environment; });
+  reject(value => { value.on.workflow_call.inputs.authorized.default = true; });
+  reject(value => { delete value.on.workflow_call.outputs['evidence-digest']; });
+  reject(value => { delete value.jobs.invoke.outputs['evidence-digest']; });
+  reject(value => { delete value.jobs.invoke.steps[2].with.release; });
+  reject(value => { value.jobs.invoke.steps[2].with.command = 'build'; });
+  reject(value => { value.jobs.invoke.steps[2].uses = 'UOR-Foundation/PrismPM/action@main'; });
+  reject(value => { value.jobs.invoke.steps[1].if = 'false'; });
+  reject(value => { value.jobs.invoke.steps[1].with.command = 'build'; });
+  reject(value => { value.jobs.invoke.steps.pop(); });
+});

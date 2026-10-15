@@ -73,7 +73,10 @@ permissions: {}
 jobs:
   invoke:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    concurrency:
+      group: prismpm-sdk-invoke-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
     outputs:

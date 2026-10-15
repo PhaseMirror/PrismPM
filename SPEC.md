@@ -2057,6 +2057,17 @@ deployment, and post-deployment verification attaches evidence. The release
 digest is created once and passed between jobs; no deployment job rebuilds,
 uses a mutable tag, edits generated output, or skips missing evidence.
 
+CI validation owners use workflow/ref cancellation groups without omitting
+registered gates. Complete two-pass VV and native-source-review budgets remain
+360 minutes; other job defaults remain until full-run measurements justify caps.
+The reusable SDK uses a distinct callee-prefixed workflow/ref job group with
+`cancel-in-progress: false` and `queue: max`. Within its supported capacity, the
+callee group does not cancel sibling builds or mutating SDK calls. GitHub permits
+100 pending calls, cancels overflow, and does not guarantee dispatch order
+([queue policy](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)).
+Actual-YAML policy tests do not establish execution or queue acceptance: retained
+complete-gate and real-caller evidence is required.
+
 Template checking is read-only. Explicit update creates a reviewable patch or
 automated pull request because GitHub template repositories do not propagate
 changes. One minimal human-reviewed bootstrap workflow stays outside generated

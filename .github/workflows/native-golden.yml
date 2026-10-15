@@ -11,7 +11,7 @@ concurrency:
 jobs:
   native-source-review:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 180
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
